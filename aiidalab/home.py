@@ -70,7 +70,7 @@ class AiidaLabHome:
         """Rendering home app."""
         launcher = load_widget('home')
         launcher.layout = ipw.Layout(width="900px", padding="20px", color='gray')
-        app = GitManagedAiidaLabApp('home', self.app_registry.get('home', None), AIIDALAB_APPS)
+        app = GitManagedAiidaLabApp(AIIDALAB_APPS / 'home', self.app_registry.get('home', None))
         update_info = ipw.HTML("{}".format(app.update_info))
         update_info.layout.margin = "0px 0px 0px 800px"
         description_box = ipw.HTML("<a href=./single_app.ipynb?app=home><button>Manage App</button></a> {}".format(
@@ -99,7 +99,7 @@ class AiidaLabHome:
         launcher.layout = ipw.Layout(width="900px")
         btn_box = mk_buttons(name)
         app_data = self.app_registry.get(name, None)
-        app = GitManagedAiidaLabApp(name, app_data, AIIDALAB_APPS)
+        app = GitManagedAiidaLabApp(AIIDALAB_APPS / name, app_data)
         update_info = ipw.HTML("{}".format(app.update_info))
         update_info.layout.margin = "0px 0px 0px 800px"
         run_line = ipw.HBox([launcher, btn_box])

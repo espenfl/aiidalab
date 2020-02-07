@@ -5,6 +5,7 @@ import re
 import os
 import shutil
 import json
+from pathlib import Path
 from time import sleep
 from collections import OrderedDict
 from subprocess import check_output, STDOUT
@@ -41,7 +42,9 @@ class VersionSelectorWidget(ipw.VBox):
 class AiidaLabApp:  # pylint: disable=attribute-defined-outside-init,too-many-public-methods,too-many-instance-attributes
     """Class to manage AiiDA lab app."""
 
-    def __init__(self, name, app_data, aiidalab_apps):  #, custom_update=False):
+    def __init__(self, path, app_data):  #, custom_update=False):
+        self._path = Path(path).resolve()
+
         if app_data is not None:
             self._git_url = app_data['git_url']
             self._meta_url = app_data['meta_url']
@@ -51,19 +54,25 @@ class AiidaLabApp:  # pylint: disable=attribute-defined-outside-init,too-many-pu
             self._git_url = None
             self._git_remote_refs = {}
         self.install_info = ipw.HTML()
-        self.aiidalab_apps = aiidalab_apps
-        self.name = name
+
+    @property
+    def path(self):
+        return self._path
+
+    @property
+    def name(self):
+        return self.path.stem
 
     def in_category(self, category):
         # One should test what happens if the category won't be defined.
         return category in self.categories
 
-    def _get_appdir(self):
-        return os.path.join(self.aiidalab_apps, self.name)
+    def _get_appdir(self):  # deprecated
+        return str(self.path)
 
     def is_installed(self):
         """The app is installed if the corresponding folder is present."""
-        return os.path.isdir(self._get_appdir())
+        return self.path.is_dir()
 
     def has_git_repo(self):
         """Check if the app has a .git folder in it."""
