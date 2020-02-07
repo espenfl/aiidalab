@@ -38,7 +38,7 @@ class VersionSelectorWidget(ipw.VBox):
         super().__init__([self.selected, self.change_btn, self.info])
 
 
-class AiidaLabApp():  # pylint: disable=attribute-defined-outside-init,too-many-public-methods,too-many-instance-attributes
+class AiidaLabApp:  # pylint: disable=attribute-defined-outside-init,too-many-public-methods,too-many-instance-attributes
     """Class to manage AiiDA lab app."""
 
     def __init__(self, name, app_data, aiidalab_apps):  #, custom_update=False):
@@ -644,3 +644,7 @@ class AiidaLabApp():  # pylint: disable=attribute-defined-outside-init,too-many-
             displayed_app = ipw.HTML("""<center><h1>Enable <i class="fa fa-git"></i> first!</h1></center>""")
 
         return displayed_app
+
+
+class GitManagedAiidaLabApp(AiidaLabApp):
+    """Class to manage AiiDA lab app with git."""
