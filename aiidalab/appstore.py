@@ -66,7 +66,7 @@ class AiidaLabAppStore(ipw.HBox):
         self.category_filter.options = list(self.category_title_key_mapping)
 
         # Define the apps that are going to be displayed.
-        self.apps_to_display = [GitManagedAiidaLabApp(name, app, AIIDALAB_APPS)
+        self.apps_to_display = [GitManagedAiidaLabApp(AIIDALAB_APPS / name, app)
                                 for name, app in self.registry_sorted_list]
 
         self.update_page_selector()
@@ -94,7 +94,7 @@ class AiidaLabAppStore(ipw.HBox):
     def change_vis_list(self, _=None):
         """This function creates a list of apps to be displayed. Moreover, it creates a parallel list of categories.
         After this the page selector update is called."""
-        self.apps_to_display = [GitManagedAiidaLabApp(name, app, AIIDALAB_APPS)
+        self.apps_to_display = [GitManagedAiidaLabApp(AIIDALAB_APPS / name, app)
                                 for name, app in self.registry_sorted_list]
 
         if self.only_installed.value:

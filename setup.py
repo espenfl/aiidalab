@@ -28,6 +28,7 @@ if __name__ == '__main__':
             # like `jupyter serverextension enable --sys-prefix`
             ("etc/jupyter/jupyter_notebook_config.d", ["jupyter-config/jupyter_notebook_config.d/aiidalab.json"])
         ],
+        python_requires='>=3.7',
         install_requires=requirements,
         zip_safe=False,
         **kwargs)
