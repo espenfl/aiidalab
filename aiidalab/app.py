@@ -10,7 +10,6 @@ from time import sleep
 from collections import OrderedDict
 from subprocess import check_output, STDOUT
 
-import requests
 import ipywidgets as ipw
 from dulwich.repo import Repo
 from dulwich.objects import Commit, Tag
@@ -18,33 +17,36 @@ from dulwich.porcelain import status, clone, pull, fetch
 from dulwich.errors import NotGitRepository
 
 from .config import AIIDALAB_DEFAULT_GIT_BRANCH
+from .widgets import VersionSelectorWidget
 
 
 class AppNotInstalledException(Exception):
     pass
 
 
-class VersionSelectorWidget(ipw.VBox):
-    """Class to choose app's version."""
-
-    def __init__(self):
-        self.change_btn = ipw.Button(description="choose seleted")
-        self.selected = ipw.Select(
-            options={},
-            description='Select version',
-            disabled=False,
-            style={'description_width': 'initial'},
-        )
-        self.info = ipw.HTML('')
-        super().__init__([self.selected, self.change_btn, self.info])
-
-
-class AiidaLabApp:  # pylint: disable=attribute-defined-outside-init,too-many-public-methods,too-many-instance-attributes
+class AiidaLabApp:
     """Class to manage AiiDA lab app."""
 
-    def __init__(self, path, app_data):  #, custom_update=False):
+    def __init__(self, path):
         self._path = Path(path).resolve()
 
+    @property
+    def path(self):
+        return self._path
+
+    def is_installed(self):
+        """The app is installed if the corresponding folder is present."""
+        return self.path.is_dir()
+
+
+
+class GitManagedAiidaLabApp(AiidaLabApp):
+    """Class to manage git-installed AiiDA lab app."""
+
+    class InvalidAppDirectory(TypeError):
+        pass
+
+    def __init__(self, path, app_data):  #, custom_update=False):
         if app_data is not None:
             self._git_url = app_data['git_url']
             self._meta_url = app_data['meta_url']
@@ -54,10 +56,7 @@ class AiidaLabApp:  # pylint: disable=attribute-defined-outside-init,too-many-pu
             self._git_url = None
             self._git_remote_refs = {}
         self.install_info = ipw.HTML()
-
-    @property
-    def path(self):
-        return self._path
+        super().__init__(path)
 
     @property
     def name(self):
@@ -69,10 +68,6 @@ class AiidaLabApp:  # pylint: disable=attribute-defined-outside-init,too-many-pu
 
     def _get_appdir(self):  # deprecated
         return str(self.path)
-
-    def is_installed(self):
-        """The app is installed if the corresponding folder is present."""
-        return self.path.is_dir()
 
     def has_git_repo(self):
         """Check if the app has a .git folder in it."""
@@ -524,29 +519,31 @@ class AiidaLabApp:  # pylint: disable=attribute-defined-outside-init,too-many-pu
 
     @property
     def metadata(self):
-        """Return metadata dictionary. Give the priority to the local copy (better for the developers)."""
+        """Return the metadata dictionary."""
+        # NOTE The inernal caching has been removed for now (premature optimization).
+        metadata_file = self.path / 'metadata.json'
         try:
-            return self._metadata
-        except AttributeError:
-            if self.is_installed():
-                try:
-                    with open(os.path.join(self._get_appdir(), 'metadata.json')) as json_file:
-                        self._metadata = json.load(json_file)
-                except IOError:
-                    self._metadata = {}
-            else:
-                self._metadata = requests.get(self._meta_url).json()
-            return self._metadata
+            return json.loads(metadata_file.read_bytes())
+        except FileNotFoundError:
+            raise self.InvalidAppDirectory(
+                f"Metadata file missing: '{metadata_file}'")
+        except json.decoder.JSONDecodeError:
+            raise self.InvalidAppDirectory(
+                f"Ill-formed metadata file: '{metadata_file}'")
+        except Exception as error:
+            raise self.InvalidAppDirectory(
+                f"Unknown error accessing metadata file: {error}") from error
 
-    def _get_from_metadata(self, what):
+    def _get_from_metadata(self, key):
         """Get information from metadata."""
-
+        # NOTE This function must be removed after we can make the assumption that
+        #      the app must exist.
         try:
-            return "{}".format(self.metadata[what])
+            return str(self.metadata[key])
         except KeyError:
-            if not os.path.isfile(os.path.join(self._get_appdir(), 'metadata.json')):
-                return '({}) metadata.json file is not present'.format(what)
-            return 'the field "{}" is not present in metadata.json file'.format(what)
+            return 'the field "{}" is not present in metadata.json file'.format(key)
+        except self.InvalidAppDirectory as error:
+            return str(error)
 
     @property
     def authors(self):
@@ -653,7 +650,3 @@ class AiidaLabApp:  # pylint: disable=attribute-defined-outside-init,too-many-pu
             displayed_app = ipw.HTML("""<center><h1>Enable <i class="fa fa-git"></i> first!</h1></center>""")
 
         return displayed_app
-
-
-class GitManagedAiidaLabApp(AiidaLabApp):
-    """Class to manage AiiDA lab app with git."""

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """AiiDA lab app store."""
 
+import requests
 import ipywidgets as ipw
 from IPython.display import display
 
@@ -11,6 +12,23 @@ from .utils import load_app_registry
 
 class AiidaLabAppStore(ipw.HBox):
     """Class to manage AiiDA lab app store."""
+
+    class Entry(GitManagedAiidaLabApp):
+        """Represents an entry in the app store."""
+
+        def __init__(self, *args, **kwargs):
+            self._metadata = None
+            super().__init__(*args, **kwargs)
+
+        @property
+        def metadata(self):
+            if self._metadata is None:
+                try:
+                    self._metadata = super().metadata
+                except self.InvalidAppDirectory:
+                    self._metadata = requests.get(self._meta_url).json()
+            return self._metadata
+
 
     def __init__(self):
         requested_dict = load_app_registry()
@@ -66,7 +84,7 @@ class AiidaLabAppStore(ipw.HBox):
         self.category_filter.options = list(self.category_title_key_mapping)
 
         # Define the apps that are going to be displayed.
-        self.apps_to_display = [GitManagedAiidaLabApp(AIIDALAB_APPS / name, app)
+        self.apps_to_display = [self.Entry(AIIDALAB_APPS / name, app)
                                 for name, app in self.registry_sorted_list]
 
         self.update_page_selector()
@@ -94,7 +112,7 @@ class AiidaLabAppStore(ipw.HBox):
     def change_vis_list(self, _=None):
         """This function creates a list of apps to be displayed. Moreover, it creates a parallel list of categories.
         After this the page selector update is called."""
-        self.apps_to_display = [GitManagedAiidaLabApp(AIIDALAB_APPS / name, app)
+        self.apps_to_display = [self.Entry(AIIDALAB_APPS / name, app)
                                 for name, app in self.registry_sorted_list]
 
         if self.only_installed.value:
