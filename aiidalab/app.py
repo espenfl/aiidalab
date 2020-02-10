@@ -114,7 +114,7 @@ class GitManagedAiidaLabApp:
             return str(self.metadata[key])
         except KeyError:
             return f'the field "{key}" is not present in metadata.json file'
-        except Exception as error:
+        except Exception as error:  # pylint: disable=broad-except
             return f'unknown while retrieving metadata: {error}'
 
     @property
