@@ -1,24 +1,24 @@
 # -*- coding: utf-8 -*-
 """Module to manage AiiDA lab apps."""
 
-import re
 import os
 import shutil
 import json
 from pathlib import Path
-from time import sleep
-from collections import OrderedDict
 from subprocess import check_output, STDOUT
 
 import requests
 import ipywidgets as ipw
+import traitlets
 from dulwich.repo import Repo
 from dulwich.objects import Commit, Tag
-from dulwich.porcelain import status, clone, pull, fetch
+from dulwich.porcelain import clone, ls_remote
+from dulwich.porcelain import status as git_status
 from dulwich.errors import NotGitRepository
 from cachetools.func import ttl_cache
 
 from .widgets import VersionSelectorWidget
+from .utils import get_remotes
 
 
 class AppNotInstalledException(Exception):
@@ -64,12 +64,18 @@ class AiidaLabApp:
                 f"Unknown error accessing metadata file: {error}") from error
 
 
-class GitManagedAiidaLabApp:
+class GitManagedAiidaLabApp(traitlets.HasTraits):
     """Class to manage git-installed AiiDA lab app."""
 
-    def __init__(self, path, app_data):  #, custom_update=False):
-        assert app_data is not None
+    version = traitlets.Unicode(allow_none=True)
+    available_versions = traitlets.List(
+        traitlets.Tuple(traitlets.Unicode, traitlets.Unicode), readonly=True)
+    installed = traitlets.Bool(readonly=True)
+
+    def __init__(self, path, app_data):
+        super().__init__()
         self.path = Path(path).resolve()
+        assert app_data is not None
         self._app_data = app_data
 
         self.install_info = ipw.HTML()
@@ -149,62 +155,22 @@ class GitManagedAiidaLabApp:
 
     def found_uncommited_modifications(self):
         """Check whether the git-supervised files were modified."""
-        stts = status(self.repo)
-        if stts.unstaged:
-            return True
-        for _, value in stts.staged.items():
-            if value:
-                return True
-        return False
+        status = git_status(self.repo)
+        return status.unstaged or any(status.staged.values())
 
     def found_local_commits(self):
-        """Check whether user did some work in the current branch.
-
-        Here is the logic:
-        - if it is a tag - return False
-        - if it is a local branch - always return True (even though it
-          can be that there are no local commits in it
-        - if it is a remote branch - check properly."""
-
-        # No local commits if it is a tag.
-        if self.current_version.startswith(b'refs/tags/'):
-            return False
-
-        # Here it is assumed that if the branch is local, it has some stuff done in it,
-        # therefore True is returned even though technically it is not always true.
-        if self.current_version.startswith(b'refs/heads/'):
-            return True
-
-        # If it is a remote branch.
-        if self.current_version.startswith(b'refs/remotes/'):
-
-            # Look for the local branches that track the remote ones.
-            try:
-                local_branch = re.sub(b'refs/remotes/(\w+)/', b'refs/heads/', self.current_version)  # pylint:disable=anomalous-backslash-in-string
-                local_head_at = self.repo[bytes(local_branch)]
-
-            # Current branch is not tracking any remote one.
-            except KeyError:
-                return False
-            remote_head_at = self.repo[bytes(self.current_version)]
-            if remote_head_at.id == local_head_at.id:
-                return False
-
-            # Maybe remote head has some updates.
-            # Go back in the history and check if the current commit is in the remote branch history.
-            for cmmt in self.repo.get_walker(remote_head_at.id):
-                if local_head_at.id == cmmt.commit.id:  # If yes - then local branch is just outdated
-                    return False
-            return True
-
-        # Something else - raise an exception.
-        raise Exception("Unknown git reference type (should be either branch or tag), found: {}".format(
-            self.current_version))
+        """Check whether user did some work in the current branch."""
+        config = self.repo.get_config()
+        remotes = set(get_remotes(self.repo))
+        remote_refs = set()
+        for remote in remotes:
+            url = config.get((b'remote', remote.encode()), 'url')
+            remote_refs.update(ls_remote(url.decode()).values())
+        return any(ref not in remote_refs for ref in self.repo.get_refs().values())
 
     def found_local_versions(self):
         """Find if local git branches are present."""
-        pattern = re.compile(b'refs/heads/(\w+)')  # pylint:disable=anomalous-backslash-in-string
-        return any(pattern.match(value) for value in self.available_versions.values())
+        return any(ref.startswith('refs/heads/') for _, ref in self.available_versions)
 
     def cannot_modify_app(self):
         """Check if there is any reason to not let modifying the app."""
@@ -231,358 +197,107 @@ class GitManagedAiidaLabApp:
 
         return ''
 
-    def git_update_available(self):
-        """Check whether there are updates available for the current branch in the remote repository."""
-
-        if self.current_version is None or not self._git_url or self.current_version.startswith(b'refs/tags/'):
-            # For later: if it is a tag check for the newer tags
-            to_return = False
-
-        # If it is a branch.
-        elif self.current_version.startswith(b'refs/remotes/'):
-
-            # Learn about local repository.
-            local_branch = re.sub(b'refs/remotes/(\w+)/', b'refs/heads/', self.current_version)  # pylint:disable=anomalous-backslash-in-string
-            local_head_at = self.repo[bytes(local_branch)]
-            remote_head_at = self.repo[bytes(self.current_version)]
-
-            # Learn about remote repository.
-            try:
-                on_server_head_at = self._git_remote_refs[local_branch]
-            except KeyError:
-                return False
-
-            # Is remote reference on the server is outdated?
-            if remote_head_at.id != on_server_head_at:
-
-                # I check if the remote commit is present in my remote commit history.
-                for cmmt in self.repo.get_walker(remote_head_at.id):
-                    if cmmt.commit.id == on_server_head_at:
-                        to_return = False
-                        break
-                else:
-                    to_return = True
-
-            elif local_head_at != remote_head_at:
-
-                # Go back in the current branch commit history and see if I can find the remote commit there.
-                for cmmt in self.repo.get_walker(local_head_at.id):
-
-                    # Found, so the remote branch is outdated - no update.
-                    if cmmt.commit.id == remote_head_at.id:
-                        to_return = False
-                        break
-
-                # Not found, so the remote branch has additional commit(s).
-                else:
-                    to_return = True
-            # else
-            #return False
-        # local branches can't have an update
-        #if self.current_version.startswith(b'refs/heads'):
-        #    return False
-        # something else
-        return to_return
-
-    @property
-    def install_button(self):
-        """Button to install the app."""
-        if not hasattr(self, '_install_button'):
-            self._install_button = ipw.Button(description="install")
-            self._install_button.on_click(self._install_app)
-            self._refresh_install_button()
-        return self._install_button
-
-    def _install_app(self, _):
+    def _install_app(self, _=None):
         """Installing the app."""
-        self.install_info.value = """<i class="fa fa-spinner fa-pulse" style="color:#337ab7;font-size:4em;" ></i>
-        <font size="1"><blink>Installing the app...</blink></font>"""
         clone(source=self._git_url, target=self._get_appdir())
-        self.install_info.value = """<i class="fa fa-check" style="color:#337ab7;font-size:4em;" ></i>
-        <font size="1">Success</font>"""
-        self._refresh_version()
-        self._refresh_install_button()
-        self._refresh_update_button()
-        self._refresh_uninstall_button()
-        sleep(1)
-        self.install_info.value = ''
+        self.available_versions = list(sorted(self._collect_available_versions()))
+        self.version = self._current_version()
 
-    def _refresh_install_button(self):
-        """Refreshing install app button."""
-        if self.is_installed():
-            self._install_button.disabled = True
-            self._install_button.button_style = ''
-        else:
-            if self._git_url is None:
-                self._install_button.disabled = True
-                self._install_button.button_style = 'no url provided'
-            else:
-                # activate install button
-                self.update_button.description = 'install first'
-                self._install_button.disabled = False
-                self._install_button.button_style = 'info'
-
-    @property
-    def update_button(self):
-        """Button to updated the app."""
-        if not hasattr(self, '_update_button'):
-            self._update_button = ipw.Button(description="update to the latest")
-            self._update_button.on_click(self._update_app)
-            self._refresh_update_button()
-        return self._update_button
-
-    def _update_app(self, _):
-        """Perform app update."""
-        cannot_modify = self.cannot_modify_app()
-        if cannot_modify:
-            self.install_info.value = """<i class="fa fa-times" style="color:red;font-size:4em;" >
-            </i>Can not update the repository: {}""".format(cannot_modify)
-            sleep(3)
-            self.install_info.value = ''
-            return
-
-        self.install_info.value = """<i class="fa fa-spinner fa-pulse" style="color:#337ab7;font-size:4em;" ></i>
-        <font size="1"><blink>Updating the app...</blink></font>"""
-        fetch(repo=self.repo, remote_location=self._git_url)
-        pull(repo=self.repo, remote_location=self._git_url, refspecs=self.version.selected.label)
-        self.install_info.value = """<i class="fa fa-check" style="color:#337ab7;font-size:4em;" ></i>
-        <font size="1">Success</font>"""
-        self._refresh_update_button()
-        sleep(1)
-        self.install_info.value = ''
-
-    def _refresh_update_button(self):
-        """Refresh update buttons."""
-        if self.is_installed():
-            if self.git_update_available():
-                self.update_button.disabled = False
-                self.update_button.button_style = 'warning'
-                self.update_button.description = 'update'
-            else:
-                self.update_button.disabled = True
-                self.update_button.button_style = ''
-                self.update_button.description = 'no update available'
-        else:
-            self.update_button.disabled = True
-            self.update_button.button_style = ''
-            self.update_button.description = 'Install first'
-
-    @property
-    def uninstall_button(self):
-        """Button to uninstall the app."""
-        if not hasattr(self, '_uninstall_button'):
-            self._uninstall_button = ipw.Button(description="uninstall")
-            self._uninstall_button.on_click(self._uninstall_app)
-            self._refresh_uninstall_button()
-        return self._uninstall_button
-
-    def _uninstall_app(self, _):
+    def _uninstall_app(self):
         """Perfrom app uninstall."""
         cannot_modify = self.cannot_modify_app()
 
         # Check if one cannot install the app.
         if cannot_modify:
-            pass
-        elif self.name == 'home':
-            cannot_modify = "can't remove the home app"
-        elif self.found_local_versions():
-            cannot_modify = "you have local branches"
-        else:
-            # look for the local commited modifications all the available branches
-            initial_value = self.current_version
-            for key, value in self.available_versions.items():
-                self.version.selected.value = value  # switching to the branch in value
-                self._change_version(sleep_time=0)  # actually switching the branch
-                if self.found_local_commits():
-                    cannot_modify = "you have local commits ({} branch)".format(key)
-                    self.version.selected.value = initial_value  # switch back to the initial version
-                    self._change_version(sleep_time=0)  # actually switching the branch
-                    break
+            raise RuntimeError(cannot_modify)
 
-        # And finally: uninstall or not?
-        if cannot_modify:
-            self.install_info.value = """<i class="fa fa-times" style="color:red;font-size:4em;" >
-            </i>Can not delete the repository: {}""".format(cannot_modify)
-            sleep(3)
+        if self.name == 'home':
+            raise RuntimeError("Can't remove home app.")
 
-        # Perform uninstall process.
-        else:
-            self.install_info.value = """<i class="fa fa-spinner fa-pulse" style="color:#337ab7;font-size:4em;" ></i>
-            <font size="1"><blink>Unistalling the app...</blink></font>"""
-            sleep(1)
-            shutil.rmtree(self._get_appdir())
-            if hasattr(self, '_current_version'):
-                delattr(self, '_current_version')
-            if hasattr(self, '_available_versions'):
-                delattr(self, '_available_versions')
-            self.install_info.value = """<i class="fa fa-check" style="color:#337ab7;font-size:4em;" ></i>
-            <font size="1">Success</font>"""
-            self._refresh_version()
-            self._refresh_install_button()
-            self._refresh_update_button()
-            self._refresh_uninstall_button()
-            sleep(1)
-        self.install_info.value = ''
+        if self.found_local_commits():
+            raise RuntimeError("You have local non-pushed commits.")
 
-    def _refresh_uninstall_button(self):
-        """Refresh uninstall button."""
-        if self.is_installed():
-            self.uninstall_button.disabled = False
-            self.uninstall_button.button_style = 'danger'
-        else:
-            self.uninstall_button.disabled = True
-            self.uninstall_button.button_style = ''
+        # Perform removal
+        shutil.rmtree(self._get_appdir())
+        self.set_trait('available_versions', [])
 
-    @property
-    def version(self):
+    def _current_version(self):
+        try:
+            return self.repo.refs.follow(b'HEAD')[0][1]
+        except IndexError:
+            return None
+
+    @traitlets.default('version')
+    def _default_version(self):
         """App's version."""
-        if not hasattr(self, '_version'):
-            self._version = VersionSelectorWidget()
-            self._version.change_btn.on_click(self._change_version)
-            self._refresh_version()
-        return self._version
+        return self._current_version()
+
+    @traitlets.default('installed')
+    def _default_installed(self):
+        return self.version is not None
 
     @property
+    @ttl_cache()
     def refs_dict(self):
         """Returns a dictionary of references: branch names, tags."""
-        if not hasattr(self, '_refs_dict'):
-            self._refs_dict = {}
-            for key, value in self.repo.get_refs().items():
-                if key.endswith(b'HEAD') or key.startswith(b'refs/heads/'):
-                    continue
-                obj = self.repo.get_object(value)
-                if isinstance(obj, Tag):
-                    self._refs_dict[key] = obj.object[1]
-                elif isinstance(obj, Commit):
-                    self._refs_dict[key] = value
-        return self._refs_dict
+        if not self.repo:
+            return None
 
-    @property
-    def available_versions(self):
-        """Function that looks for all the available branches. The branches can be both
-        local and remote.
+        refs_dict = {}
+        for key, value in self.repo.get_refs().items():
+            if key.endswith(b'HEAD') or key.startswith(b'refs/heads/'):
+                continue
+            obj = self.repo.get_object(value)
+            if isinstance(obj, Tag):
+                refs_dict[key] = obj.object[1]
+            elif isinstance(obj, Commit):
+                refs_dict[key] = value
+        return refs_dict
 
-        : return : an OrderedDict that contains all available branches, for example
-                   OrderedDict([('master', 'refs/remotes/origin/master')])."""
+    @traitlets.default('available_versions')
+    def _default_available_versions(self):
+        return list(self._collect_available_versions())
 
-        if not hasattr(self, '_available_versions'):
-            # HEAD branch won't be included
-            if not self.refs_dict:  # if no branches were found - return None
-                return {}
+    def _collect_available_versions(self):
+        """Function that looks for all the available branches."""
 
-            # Add remote branches.
-            available = OrderedDict({
-                name.split(b'/')[-1].decode("utf-8"): name
-                for name, _ in self.refs_dict.items()
-                if name.startswith(b'refs/remotes/')
-            })
+        def human_ref_name(ref):
+            prefixes_to_strip = (
+                'refs/heads/',    # local branch
+                'refs/remotes/',  # remote branch
+                'refs/tags/',     # tag
+            )
+            for prefix in prefixes_to_strip:
+                if ref.startswith(prefix):
+                    return ref[len(prefix):]
+            return ref
 
-            # Add local branches that do not have tracked remotes.
-            for name in self.refs_dict:
-                if name.startswith(b'refs/heads/'):
-                    branch_label = name.replace(b'refs/heads/', b'').decode("utf-8")
-                    pattern = re.compile("refs/remotes/.*/{}".format(branch_label))
-                    # check if no tracked remotes that correspond to the current local branch
-                    if not any(pattern.match(value) for value in available.values()):
-                        available[branch_label] = name
+        if self.repo:
+            for ref in [ref.decode('utf-8') for ref in self.repo.get_refs()]:
+                if ref != 'HEAD':
+                    yield human_ref_name(ref), ref
 
-            # Add tags.
-            available.update(
-                sorted({
-                    name.split(b'/')[-1].decode("utf-8"): name
-                    for name, _ in self.refs_dict.items()
-                    if name.startswith(b'refs/tags/')
-                }.items(),
-                       reverse=True))
-            self._available_versions = available
-        return self._available_versions
+    @traitlets.validate('version')
+    def _validate_version(self, proposal):
+        if proposal['value'] is None and self.path.exists():
+            raise traitlets.TraitError("Can't change version to 'None' if repository exists.")
+        if self.found_uncommited_modifications():
+            raise traitlets.TraitError("Can't change version with local modifications!")
+        return proposal['value']
 
-    @property
-    def current_version(self):
-        """Function that returns the reference to the currently selected branch,
-        for example 'refs/remotes/origin/master'."""
-
-        if not hasattr(self, '_current_version'):
-
-            # If no branches were found - return None
-            if not self.refs_dict:
-                return None
-
-            # Get the current version
-            available = self.available_versions
-            try:
-
-                # Get local branch name, except if not yet exists.
-                current = self.repo.refs.follow(b'HEAD')[0][1]  # returns 'refs/heads/master'
-
-                # If it is a tag it will except here
-                branch_label = current.replace(b'refs/heads/', b'')  # becomes 'master'
-
-                # Find the corresponding (remote or local) branch among the ones that were found before.
-                pattern = re.compile(b"refs/.*/%s" % branch_label)
-                for key in set(available.values()):
-                    if pattern.match(key):
-                        current = key
-
-            # In case this is not a branch, but a tag for example.
-            except IndexError:
-                reverted_refs_dict = {value: key for key, value in self.refs_dict.items()}
-                try:
-                    current = reverted_refs_dict[self.repo.refs.follow(b'HEAD')
-                                                 [1]]  # knowing the hash I can access the tag
-                except KeyError:
-                    print(("Detached HEAD state ({} app)?".format(self.name)))
-                    return None
-            self._current_version = current
-        return self._current_version
-
-    def _change_version(self, _=None, sleep_time=2):
+    @traitlets.observe('version')
+    def _observe_version(self, change):
         """Change app's version."""
+        new_version = change['new']
+        if new_version is None:
+            self._uninstall_app()
+        elif new_version != self.repo.head():
+            if new_version.startswith('refs/heads/'):  # local branch
+                new_version = new_version[len('refs/heads/'):]
 
-        if not self.current_version == self.version.selected.value:
-            if self.found_uncommited_modifications():
-                self.version.info.value = """"<i class="fa fa-times" style="color:red;font-size:4em;" ></i>
-                Can not switch to the branch {}:
-                you have uncommited modifitaions""".format(self.version.selected.label)
-                sleep(2)
-                self.version.info.value = ''
-                return
+            check_output(['git', 'checkout', new_version], cwd=self._get_appdir(), stderr=STDOUT)
 
-            check_output(['git checkout {}'.format(self.version.selected.label)],
-                         cwd=self._get_appdir(),
-                         stderr=STDOUT,
-                         shell=True)
-            if hasattr(self, '_current_version'):
-                delattr(self, '_current_version')
-            self.version.info.value = """<i class="fa fa-check" style="color:#337ab7;font-size:4em;" ></i>
-            <font size="1">Success, changed to {}</font>""".format(self.version.selected.label)
-            sleep(sleep_time)
-            self.version.info.value = ''
-            self._refresh_version()
-
-        else:
-            self.version.info.value = """<i class="fa fa-times" style="color:red;font-size:4em;" ></i>
-            <font size="1">Same branch, so no changes</font>"""
-            sleep(sleep_time)
-            self.version.info.value = ''
-
-    def _refresh_version(self):
-        """Refresh version."""
-        if self.is_installed() and self.has_git_repo():
-            self.version.selected.options = self.available_versions
-            self.version.selected.value = self.current_version
-
-            # Check if it is possible to replace with
-            # self.version.layout.visibility = 'visibility'
-            self.version.selected.layout.visibility = 'visible'
-            self.version.change_btn.layout.visibility = 'visible'
-        else:
-            # Deactivate version selector.
-
-            # Check if it is possible to replace with
-            # self.version.layout.visibility = 'hidden'
-            self.version.selected.layout.visibility = 'hidden'
-            self.version.change_btn.layout.visibility = 'hidden'
+        self.set_trait('installed', new_version is not None)
 
     @property
     def git_url(self):
@@ -604,76 +319,86 @@ class GitManagedAiidaLabApp:
     def more(self):
         return """<a href=./single_app.ipynb?app={}>Manage App</a>""".format(self.name)
 
-    @property
     def logo(self):
+        return ipw.HTML(f'<img src="{self.logo_path()}">', layout=ipw.Layout({'width': '100px', 'height': '100px'}))
+
+    def logo_path(self):
         """Return logo object. Give the priority to the local version"""
-
-        # For some reason standard ipw.Image() app does not work properly.
-        res = ipw.HTML('<img src="./aiidalab_logo_v4.svg">', layout={'width': '100px', 'height': '100px'})
-
-        # Checking whether the 'logo' key is present in metadata dictionary.
-        if 'logo' not in self.metadata:
-            res.value = '<img src="./aiidalab_logo_v4.svg">'
-
-        # If 'logo' key is present and the app is installed.
-        elif self.is_installed():
-            res.value = '<img src="{}">'.format(os.path.join('..', self.name, self.metadata['logo']))
-
-        # If not installed, getting file from the remote git repository.
-        else:
-            # Remove .git if present.
-            html_link = os.path.splitext(self._git_url)[0]
-
-            # We expect it to always be a git repository
-            html_link += '/master/' + self.metadata['logo']
-            if 'github.com' in html_link:
-                html_link = html_link.replace('github.com', 'raw.githubusercontent.com')
-                if html_link.endswith('.svg'):
-                    html_link += '?sanitize=true'
-            res.value = '<img src="{}">'.format(html_link)
-
-        return res
+        if self.is_installed():  # pylint:disable=no-else-return
+            return os.path.join('..', self.name, self.metadata['logo'])
+        else:  # pylint:disable=no-else-return
+            return "./aiidalab_logo_v4.svg"
+        # TODO: Implement remote fetch
 
     @property
     def repo(self):
         """Returns Git repository."""
-        if not hasattr(self, '_repo'):
-            if self.is_installed():
-                self._repo = Repo(self._get_appdir())
-            else:
-                raise AppNotInstalledException("The app is not installed")
-        return self._repo
-
-    @property
-    def update_info(self):
-        """Update app info."""
-        if not self.has_git_repo():
-            return """<font color="#D8000C"><i class='fa fa-times-circle'></i> Not a Git Repo</font>"""
-        if not self._git_url:
-            return """<font color="#D8000C"><i class='fa fa-times-circle'></i> No remote URL</font>"""
-        if self.git_update_available():
-            return """<font color="#9F6000"><i class='fa fa-warning'></i> Update Available</font>"""
-        return """<font color="#270"><i class='fa fa-check'></i> Latest Version</font>"""
+        if self.is_installed():  # pylint:disable=no-else-return
+            return Repo(self._get_appdir())
+        else:
+            return None
 
     def render_app_manager_widget(self):
         """"Display widget to manage the app."""
-        if self.has_git_repo():
-            description = ipw.HTML("""<b> <div style="font-size: 30px; text-align:center;">{}</div></b>
-            <br>
-            <b>Authors:</b> {}
-            <br>
-            <b>Description:</b> {}
-            <br>
-            <b>Git URL:</b> {}""".format(self.title, self.authors, self.description, self.git_url))
-            logo = self.logo
-            logo.layout.margin = "100px 0px 0px 0px"
-            description.layout = {'width': '800px'}
-            displayed_app = ipw.VBox([
-                ipw.HBox([self.logo, description]),
-                ipw.HBox([self.uninstall_button, self.update_button, self.install_button]),
-                ipw.HBox([self.install_info]), self.version
-            ])
-        else:
-            displayed_app = ipw.HTML("""<center><h1>Enable <i class="fa fa-git"></i> first!</h1></center>""")
+        return GitManagedAiidaLabAppWidget(self)
 
-        return displayed_app
+
+class GitManagedAiidaLabAppWidget(ipw.VBox):
+
+    def __init__(self, app):
+        self.app = app
+
+        self.install_info = ipw.HTML()
+
+        self.install_button = ipw.Button(description="install")
+        self.install_button.on_click(self.app._install_app)
+        self.install_button.disabled = self.app.installed
+
+        self.uninstall_button = ipw.Button(description="uninstall")
+
+        def _on_uninstall_button_clicked(_):
+            self.app.version = None
+
+        self.uninstall_button.on_click(_on_uninstall_button_clicked)
+        self.uninstall_button.disabled = not self.app.installed
+
+        self.app.observe(self._on_change_app_installed, 'installed')
+
+        self.buttons = ipw.HBox([self.uninstall_button, self.install_button])
+
+        self.version_selector = VersionSelectorWidget(
+            options=self.app.available_versions, value=self.app.version)
+
+        self.logo = ipw.HTML()
+        self.logo.layout.width = '100px'
+        self.logo.layout.height = '100px'
+        self.logo.layout.margin = "100px 0px 0px 0px"
+
+        self.description = ipw.HTML()
+        self.description.layout = {'width': '800px'}
+
+        self._update_logo_and_description()  # initial update
+        self.banner = ipw.HBox([self.logo, self.description])
+
+        self.app.observe(self._update_logo_and_description, 'version')
+
+        traitlets.dlink((self.app, 'available_versions'), (self.version_selector.selected, 'options'))
+        traitlets.link((self.app, 'version'), (self.version_selector.selected, 'value'))
+
+        super().__init__(children=[self.banner, self.buttons, self.install_info, self.version_selector])
+
+    def _on_change_app_installed(self, change):
+        installed = change['new']
+        self.install_button.disabled = installed
+        self.uninstall_button.disabled = not installed
+
+    def _update_logo_and_description(self, _=None):
+        self.description.value = F"""
+        <b> <div style="font-size: 30px; text-align:center;">{self.app.title}</div></b>
+        <br>
+        <b>Authors:</b> {self.app.authors}
+        <br>
+        <b>Description:</b> {self.app.description}
+        <br>
+        <b>Git URL:</b> {self.app.git_url}"""
+        self.logo.value = f'<img src="{self.app.logo_path()}">'

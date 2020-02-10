@@ -2,6 +2,7 @@
 
 import sys
 import json
+import re
 from os import path
 from importlib import import_module
 from urllib.parse import urlparse
@@ -89,3 +90,10 @@ def load_start_md(name):
 
     except Exception as exc:  # pylint: disable=broad-except
         return ipw.HTML("Could not load start.md: {}".format(str(exc)))
+
+
+def get_remotes(repo):
+    for ref in [ref.decode() for ref in repo.get_refs()]:
+        match = re.match(r'refs\/remotes\/(?P<remote>.+)\/.*', ref)
+        if match:
+            yield match.groupdict()['remote']
