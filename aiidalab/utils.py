@@ -1,8 +1,10 @@
 """Helpful utilities for the AiiDA lab tools."""
 
 import sys
+import json
 from os import path
 from importlib import import_module
+from urllib.parse import urlparse
 
 from markdown import markdown
 import requests
@@ -36,11 +38,16 @@ except ImportError:
 @ttl_cache()
 def load_app_registry():
     """Load apps' information from the AiiDA lab registry."""
-    try:
-        return requests.get(AIIDALAB_REGISTRY).json()['apps']
-    except ValueError:
-        print("Registry server is unavailable! Can't check for the updates")
-        return dict()
+    parsed_url = urlparse(AIIDALAB_REGISTRY)
+    if parsed_url.scheme == 'file':
+        with open(parsed_url.path) as file:
+            return json.loads(file.read())
+    else:
+        try:
+            return requests.get(AIIDALAB_REGISTRY).json()
+        except ValueError:
+            print("Registry server is unavailable! Can't check for the updates")
+            return dict(apps=dict(), catgories=dict())
 
 
 def load_widget(name):
