@@ -27,6 +27,9 @@ class AppNotInstalledException(Exception):
 class AiidaLabApp:
     """Class to manage AiiDA lab app."""
 
+    class InvalidAppDirectory(TypeError):
+        pass
+
     def __init__(self, path):
         self._path = Path(path).resolve()
 
@@ -34,17 +37,59 @@ class AiidaLabApp:
     def path(self):
         return self._path
 
+    @property
+    def name(self):
+        return self.path.stem
+
     def is_installed(self):
         """The app is installed if the corresponding folder is present."""
         return self.path.is_dir()
+
+    @property
+    def metadata(self):
+        """Return the metadata dictionary."""
+        # NOTE The inernal caching has been removed for now (premature optimization).
+        metadata_file = self.path / 'metadata.json'
+        try:
+            return json.loads(metadata_file.read_bytes())
+        except FileNotFoundError:
+            raise self.InvalidAppDirectory(
+                f"Metadata file missing: '{metadata_file}'")
+        except json.decoder.JSONDecodeError:
+            raise self.InvalidAppDirectory(
+                f"Ill-formed metadata file: '{metadata_file}'")
+        except Exception as error:
+            raise self.InvalidAppDirectory(
+                f"Unknown error accessing metadata file: {error}") from error
+
+    def _get_from_metadata(self, key):
+        """Get information from metadata."""
+        # NOTE This function must be removed after we can make the assumption that
+        #      the app must exist.
+        try:
+            return str(self.metadata[key])
+        except KeyError:
+            return 'the field "{}" is not present in metadata.json file'.format(key)
+        except self.InvalidAppDirectory as error:
+            return str(error)
+
+    @property
+    def authors(self):
+        return self._get_from_metadata('authors')
+
+    @property
+    def description(self):
+        return self._get_from_metadata('description')
+
+    @property
+    def title(self):
+        return self._get_from_metadata('title')
+
 
 
 
 class GitManagedAiidaLabApp(AiidaLabApp):
     """Class to manage git-installed AiiDA lab app."""
-
-    class InvalidAppDirectory(TypeError):
-        pass
 
     def __init__(self, path, app_data):  #, custom_update=False):
         if app_data is not None:
@@ -57,10 +102,6 @@ class GitManagedAiidaLabApp(AiidaLabApp):
             self._git_remote_refs = {}
         self.install_info = ipw.HTML()
         super().__init__(path)
-
-    @property
-    def name(self):
-        return self.path.stem
 
     def in_category(self, category):
         # One should test what happens if the category won't be defined.
@@ -516,46 +557,6 @@ class GitManagedAiidaLabApp(AiidaLabApp):
             # self.version.layout.visibility = 'hidden'
             self.version.selected.layout.visibility = 'hidden'
             self.version.change_btn.layout.visibility = 'hidden'
-
-    @property
-    def metadata(self):
-        """Return the metadata dictionary."""
-        # NOTE The inernal caching has been removed for now (premature optimization).
-        metadata_file = self.path / 'metadata.json'
-        try:
-            return json.loads(metadata_file.read_bytes())
-        except FileNotFoundError:
-            raise self.InvalidAppDirectory(
-                f"Metadata file missing: '{metadata_file}'")
-        except json.decoder.JSONDecodeError:
-            raise self.InvalidAppDirectory(
-                f"Ill-formed metadata file: '{metadata_file}'")
-        except Exception as error:
-            raise self.InvalidAppDirectory(
-                f"Unknown error accessing metadata file: {error}") from error
-
-    def _get_from_metadata(self, key):
-        """Get information from metadata."""
-        # NOTE This function must be removed after we can make the assumption that
-        #      the app must exist.
-        try:
-            return str(self.metadata[key])
-        except KeyError:
-            return 'the field "{}" is not present in metadata.json file'.format(key)
-        except self.InvalidAppDirectory as error:
-            return str(error)
-
-    @property
-    def authors(self):
-        return self._get_from_metadata('authors')
-
-    @property
-    def description(self):
-        return self._get_from_metadata('description')
-
-    @property
-    def title(self):
-        return self._get_from_metadata('title')
 
     @property
     def git_url(self):
