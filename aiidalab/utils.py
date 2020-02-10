@@ -6,6 +6,7 @@ from importlib import import_module
 
 from markdown import markdown
 import requests
+from cachetools.func import ttl_cache
 
 import ipywidgets as ipw
 from IPython.lib import backgroundjobs as bg
@@ -32,6 +33,7 @@ except ImportError:
     pass
 
 
+@ttl_cache()
 def load_app_registry():
     """Load apps' information from the AiiDA lab registry."""
     try:
@@ -42,15 +44,23 @@ def load_app_registry():
 
 
 def load_widget(name):
-    if path.exists(path.join(AIIDALAB_APPS, name, 'start.py')):
+    # TODO: Move function into AiidaLabApp class.
+    start_py = str(AIIDALAB_APPS[0]) / name / 'start.py'
+    if start_py.exists():
         return load_start_py(name)
-    return load_start_md(name)
+    else:
+        return load_start_md(name)
 
 
 def load_start_py(name):
+    # TODO: Move function into AiidaLabApp class.
     """Load app appearance from a Python file."""
     try:
-        mod = import_module('apps.%s.start' % name)
+        for app_path in AIIDALAB_APPS:
+            if str(app_path) not in sys.path:
+                sys.path.append(str(app_path))
+
+        mod = import_module('%s.start' % name)
         appbase = "../" + name
         jupbase = "../../.."
         notebase = jupbase + "/notebooks/apps/" + name

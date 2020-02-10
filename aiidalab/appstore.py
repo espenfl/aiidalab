@@ -4,6 +4,8 @@
 import requests
 import ipywidgets as ipw
 from IPython.display import display
+from pathlib import Path
+from pprint import pprint;
 
 from .app import GitManagedAiidaLabApp
 from .config import AIIDALAB_APPS
@@ -13,15 +15,29 @@ from .utils import load_app_registry
 class AiidaLabAppStore(ipw.HBox):
     """Class to manage AiiDA lab app store."""
 
-    class Entry(GitManagedAiidaLabApp):
+    class Entry:
         """Represents an entry in the app store."""
 
-        def __init__(self, *args, **kwargs):
+        def __init__(self, store, name, registry_data):
+            self.store = store
             self._metadata = None
-            super().__init__(*args, **kwargs)
+            self.registry_data = registry_data
+
+        @property  # TODO: move into delegate class
+        def _git_url(self):
+            return self.registry_data['git_url']
+
+        @property  # TODO: move into delegate class
+        def _git_remote_refs(self):
+            return self.registry_data['gitinfo']
+
+        @property
+        def _meta_url(self):
+            return self.registry_data['meta_url']
 
         @property
         def metadata(self):
+            pprint(self.registry_data); assert 0
             if self._metadata is None:
                 try:
                     self._metadata = super().metadata
@@ -29,8 +45,67 @@ class AiidaLabAppStore(ipw.HBox):
                     self._metadata = requests.get(self._meta_url).json()
             return self._metadata
 
+        def _get_from_metadata(self, key):
+            """Get information from metadata."""
+            # NOTE This function must be removed after we can make the assumption that
+            #      the app must exist.
+            try:
+                return str(self.metadata[key])
+            except KeyError:
+                return 'the field "{}" is not present in metadata.json file'.format(key)
+            except self.InvalidAppDirectory as error:
+                return str(error)
 
-    def __init__(self):
+        @property
+        def authors(self):
+            return self._get_from_metadata('authors')
+
+        @property
+        def description(self):
+            return self._get_from_metadata('description')
+
+        @property
+        def title(self):
+            return self._get_from_metadata('title')
+
+        @property
+        def categories(self):
+            return self.registry_data['categories']
+
+        def in_category(self, category):  # TODO: deprecate
+            return category in self.categories
+
+
+        # -----DEBUGGING------------
+        # TODO: remove this
+        _attr_registry = set()
+
+        def __getattribute__(self, name):
+            super().__getattribute__('_attr_registry').add(name)
+            return super().__getattribute__(name)
+        # --------------------------
+
+    class GitEntry(Entry):
+
+        def is_installed(self):
+            print(self)
+            print(self.name)
+            pprint(self.registry_data)
+            raise NotImplementedError()
+
+    @classmethod
+    def mk_entry(cls, store, name, app_data):
+        if 'git_url' in app_data:
+            return cls.GitEntry(store, name, app_data)
+        else:
+            raise NotImplementedError()
+
+
+    def __init__(self, path=None):
+        if path is None:
+            path = AIIDALAB_APPS
+        self.path = [Path(p).expanduser().resolve() for p in path.split(':')]
+
         requested_dict = load_app_registry()
         if requested_dict:
             self.registry_sorted_list = sorted(requested_dict['apps'].items())
@@ -84,7 +159,7 @@ class AiidaLabAppStore(ipw.HBox):
         self.category_filter.options = list(self.category_title_key_mapping)
 
         # Define the apps that are going to be displayed.
-        self.apps_to_display = [self.Entry(AIIDALAB_APPS / name, app)
+        self.apps_to_display = [self.mk_entry(self, name, app)
                                 for name, app in self.registry_sorted_list]
 
         self.update_page_selector()
@@ -112,7 +187,7 @@ class AiidaLabAppStore(ipw.HBox):
     def change_vis_list(self, _=None):
         """This function creates a list of apps to be displayed. Moreover, it creates a parallel list of categories.
         After this the page selector update is called."""
-        self.apps_to_display = [self.Entry(AIIDALAB_APPS / name, app)
+        self.apps_to_display = [self.mk_entry(self, name, app)
                                 for name, app in self.registry_sorted_list]
 
         if self.only_installed.value:
@@ -166,5 +241,7 @@ class AiidaLabAppStore(ipw.HBox):
                     ipw.HBox([app_base.install_info]),
                 ])
                 display(result)
+
+        from pprint import pprint; pprint(self.Entry._attr_registry);
 
         return self.output

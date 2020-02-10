@@ -90,21 +90,9 @@ class AiidaLabApp:
 class GitManagedAiidaLabApp(AiidaLabApp):
     """Class to manage git-installed AiiDA lab app."""
 
-    def __init__(self, path, app_data):  #, custom_update=False):
-        if app_data is not None:
-            self._git_url = app_data['git_url']
-            self._meta_url = app_data['meta_url']
-            self._git_remote_refs = app_data['gitinfo']
-            self.categories = app_data['categories']
-        else:
-            self._git_url = None
-            self._git_remote_refs = {}
+    def __init__(self, path):  #, custom_update=False):
         self.install_info = ipw.HTML()
         super().__init__(path)
-
-    def in_category(self, category):
-        # One should test what happens if the category won't be defined.
-        return category in self.categories
 
     def _get_appdir(self):  # deprecated
         return str(self.path)

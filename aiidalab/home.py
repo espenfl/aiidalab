@@ -8,7 +8,7 @@ from IPython.display import display
 
 # AiiDA lab imports.
 from .app import GitManagedAiidaLabApp
-from .config import AIIDALAB_APPS
+from .config import AIIDALAB_APPS_PATH
 from .utils import load_widget, load_app_registry
 
 
@@ -70,7 +70,7 @@ class AiidaLabHome:
         """Rendering home app."""
         launcher = load_widget('home')
         launcher.layout = ipw.Layout(width="900px", padding="20px", color='gray')
-        app = GitManagedAiidaLabApp(AIIDALAB_APPS / 'home', self.app_registry.get('home', None))
+        app = GitManagedAiidaLabApp(AIIDALAB_APPS_PATH / 'home', self.app_registry.get('home', None))
         update_info = ipw.HTML("{}".format(app.update_info))
         update_info.layout.margin = "0px 0px 0px 800px"
         description_box = ipw.HTML("<a href=./single_app.ipynb?app=home><button>Manage App</button></a> {}".format(
@@ -83,7 +83,7 @@ class AiidaLabHome:
         """Load apps according to the order defined in the config file."""
         apps = [
             path.basename(fn)
-            for fn in glob(path.join(AIIDALAB_APPS, '*'))
+            for fn in glob(path.join(AIIDALAB_APPS_PATH, '*'))
             if path.isdir(fn) and not fn.endswith('home') and not fn.endswith('__pycache__')
         ]
         config = self.read_config()
@@ -99,7 +99,7 @@ class AiidaLabHome:
         launcher.layout = ipw.Layout(width="900px")
         btn_box = mk_buttons(name)
         app_data = self.app_registry.get(name, None)
-        app = GitManagedAiidaLabApp(AIIDALAB_APPS / name, app_data)
+        app = GitManagedAiidaLabApp(AIIDALAB_APPS_PATH / name, app_data)
         update_info = ipw.HTML("{}".format(app.update_info))
         update_info.layout.margin = "0px 0px 0px 800px"
         run_line = ipw.HBox([launcher, btn_box])
