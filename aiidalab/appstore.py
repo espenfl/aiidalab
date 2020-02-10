@@ -13,12 +13,8 @@ class AiidaLabAppStore(ipw.HBox):
     """Class to manage AiiDA lab app store."""
 
     def __init__(self):
-        requested_dict = load_app_registry()
-        if requested_dict:
-            self.registry_sorted_list = sorted(requested_dict['apps'].items())
-            categories_dict = requested_dict['categories']
-        else:
-            self.registry_sorted_list = []
+        self.registry = load_app_registry()
+
         self.app_corresponding_categories = []
         self.output = ipw.Output()
 
@@ -60,14 +56,14 @@ class AiidaLabAppStore(ipw.HBox):
         apply_category_filter.on_click(self.change_vis_list)
         clear_category_filter = ipw.Button(description='clear selection')
         clear_category_filter.on_click(self._clear_category_filter)
-        self.category_title_key_mapping = {
-            categories_dict[key]['title'] if key in categories_dict else key: key for key in categories_dict
-        }
-        self.category_filter.options = list(self.category_title_key_mapping)
+
+        categories_dict = self.registry.get('categories', dict())
+        self.category_title_key_mapping = {categories_dict[key].get('title', key): key for key in categories_dict}
+        self.category_filter.options = list(self.category_title_key_mapping.keys())
 
         # Define the apps that are going to be displayed.
         self.apps_to_display = [GitManagedAiidaLabApp(AIIDALAB_APPS / name, app)
-                                for name, app in self.registry_sorted_list]
+                                for name, app in self.registered_apps]
 
         self.update_page_selector()
         super().__init__([
@@ -75,6 +71,10 @@ class AiidaLabAppStore(ipw.HBox):
             ipw.VBox([self.category_filter,
                       ipw.HBox([apply_category_filter, clear_category_filter])])
         ])
+
+    @property
+    def registered_apps(self):
+        return list(sorted(self.registry['apps'].items()))
 
     def _clear_category_filter(self, _):
         self.category_filter.value = ()
@@ -95,7 +95,7 @@ class AiidaLabAppStore(ipw.HBox):
         """This function creates a list of apps to be displayed. Moreover, it creates a parallel list of categories.
         After this the page selector update is called."""
         self.apps_to_display = [GitManagedAiidaLabApp(AIIDALAB_APPS / name, app)
-                                for name, app in self.registry_sorted_list]
+                                for name, app in self.registered_apps]
 
         if self.only_installed.value:
             self.apps_to_display = [app for app in self.apps_to_display if app.is_installed()]
