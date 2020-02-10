@@ -10,11 +10,13 @@ from time import sleep
 from collections import OrderedDict
 from subprocess import check_output, STDOUT
 
+import requests
 import ipywidgets as ipw
 from dulwich.repo import Repo
 from dulwich.objects import Commit, Tag
 from dulwich.porcelain import status, clone, pull, fetch
 from dulwich.errors import NotGitRepository
+from cachetools.func import ttl_cache
 
 from .config import AIIDALAB_DEFAULT_GIT_BRANCH
 from .widgets import VersionSelectorWidget
@@ -62,6 +64,48 @@ class AiidaLabApp:
             raise self.InvalidAppDirectory(
                 f"Unknown error accessing metadata file: {error}") from error
 
+
+class GitManagedAiidaLabApp:
+    """Class to manage git-installed AiiDA lab app."""
+
+    def __init__(self, path, app_data):  #, custom_update=False):
+        assert app_data is not None
+        self.path = Path(path).resolve()
+        self._app_data = app_data
+
+        self.install_info = ipw.HTML()
+
+    def is_installed(self):
+        return self.path.is_dir()
+
+    @property
+    def name(self):
+        return self.path.stem
+
+    @property
+    def _git_url(self):
+        return self._app_data['git_url']
+
+    @property
+    def _meta_url(self):
+        return self._app_data['meta_url']
+
+    @property
+    def _git_remote_refs(self):
+        return self._app_data['gitinfo']
+
+    @property
+    def catgories(self):
+        return self._app_data['categories']
+
+    @ttl_cache()
+    def _metadata(self):
+        return requests.get(self._meta_url).json()
+
+    @property
+    def metadata(self):
+        return self._metadata()
+
     def _get_from_metadata(self, key):
         """Get information from metadata."""
         # NOTE This function must be removed after we can make the assumption that
@@ -69,9 +113,9 @@ class AiidaLabApp:
         try:
             return str(self.metadata[key])
         except KeyError:
-            return 'the field "{}" is not present in metadata.json file'.format(key)
-        except self.InvalidAppDirectory as error:
-            return str(error)
+            return f'the field "{key}" is not present in metadata.json file'
+        except Exception as error:
+            return f'unknown while retrieving metadata: {error}'
 
     @property
     def authors(self):
@@ -85,23 +129,9 @@ class AiidaLabApp:
     def title(self):
         return self._get_from_metadata('title')
 
-
-
-
-class GitManagedAiidaLabApp(AiidaLabApp):
-    """Class to manage git-installed AiiDA lab app."""
-
-    def __init__(self, path, app_data):  #, custom_update=False):
-        if app_data is not None:
-            self._git_url = app_data['git_url']
-            self._meta_url = app_data['meta_url']
-            self._git_remote_refs = app_data['gitinfo']
-            self.categories = app_data['categories']
-        else:
-            self._git_url = None
-            self._git_remote_refs = {}
-        self.install_info = ipw.HTML()
-        super().__init__(path)
+    @property
+    def categories(self):
+        return self._app_data['categories']
 
     def in_category(self, category):
         # One should test what happens if the category won't be defined.

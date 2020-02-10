@@ -6,6 +6,7 @@ from importlib import import_module
 
 from markdown import markdown
 import requests
+from cachetools.func import ttl_cache
 
 import ipywidgets as ipw
 from IPython.lib import backgroundjobs as bg
@@ -32,13 +33,14 @@ except ImportError:
     pass
 
 
+@ttl_cache()
 def load_app_registry():
     """Load apps' information from the AiiDA lab registry."""
     try:
-        return requests.get(AIIDALAB_REGISTRY).json()
+        return requests.get(AIIDALAB_REGISTRY).json()['apps']
     except ValueError:
         print("Registry server is unavailable! Can't check for the updates")
-        return {}
+        return dict()
 
 
 def load_widget(name):
