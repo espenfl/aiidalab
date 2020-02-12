@@ -4,6 +4,7 @@
 from threading import Thread
 from time import sleep, time
 
+import traitlets
 import ipywidgets as ipw
 
 
@@ -24,3 +25,27 @@ class StatusLabel(ipw.Label):
         self.value = value
         if clear_after > 0:
             Thread(target=self._clear_value_after_delay, args=(clear_after,)).start()
+
+
+class UpdateAvailableInfoWidget(ipw.HTML):
+    """Widget that indicates whether an update is available."""
+
+    updates_available = traitlets.Bool(allow_none=True)
+
+    MESSAGES = {
+        None:
+            """<font color="#D8000C"><i class='fa fa-times-circle'></i> """\
+            """Unable to determine availability of updates.</font>""",
+        True:
+            """<font color="#9F6000"><i class='fa fa-warning'></i> Update Available</font>""",
+        False:
+            """<font color="#270"><i class='fa fa-check'></i> Latest Version</font>""",
+    }
+
+    def __init__(self, updates_available=None, **kwargs):
+        super().__init__(updates_available=None, **kwargs)
+        self._observe_updates_available(dict(new=updates_available))  # initialize
+
+    @traitlets.observe('updates_available')
+    def _observe_updates_available(self, change):
+        self.value = self.MESSAGES[change['new']]

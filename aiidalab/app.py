@@ -17,7 +17,7 @@ from dulwich.porcelain import status as git_status
 from dulwich.errors import NotGitRepository
 from cachetools.func import ttl_cache
 
-from .widgets import StatusLabel
+from .widgets import StatusLabel, UpdateAvailableInfoWidget
 from .utils import get_remotes
 
 
@@ -338,6 +338,10 @@ class GitManagedAiidaLabApp(traitlets.HasTraits):
         else:
             return None
 
+    def check_for_updates(self):
+        """Check whether there are updates available for this app."""
+        raise NotImplementedError("Unable to determine whether there are updates available.")
+
     def render_app_manager_widget(self):
         """"Display widget to manage the app."""
         return GitManagedAiidaLabAppWidget(self)
@@ -365,6 +369,12 @@ class GitManagedAiidaLabAppWidget(ipw.VBox):
         self.app.observe(self._on_change_app_installed, 'installed')
 
         self.buttons = ipw.HBox([self.install_button, self.uninstall_button])
+
+        try:
+            updates_available = self.app.check_for_updates()
+        except (NotImplementedError, RuntimeError):
+            updates_available = None
+        self.update_available_info = UpdateAvailableInfoWidget(updates_available=updates_available)
 
         self.version_selector = ipw.Select(
             options=self.app.available_versions,
@@ -395,6 +405,7 @@ class GitManagedAiidaLabAppWidget(ipw.VBox):
 
         super().__init__(children=[
             self.title, self.banner, self.buttons,
+            self.update_available_info,
             self.version_selector, self.status_message])
 
     def _on_change_app_installed(self, change):
