@@ -7,29 +7,20 @@ from time import sleep, time
 import ipywidgets as ipw
 
 
-class VersionSelectorWidget(ipw.VBox):
-    """Class to choose app's version."""
+class StatusLabel(ipw.Label):
+    """Show temporary messages for example for status updates."""
 
-    def __init__(self, options=None, value=None):
-        self.selected = ipw.Select(
-            options=options,
-            value=value,
-            description='Select version',
-            disabled=False,
-            style={'description_width': 'initial'},
-        )
-        self.selected.observe(self.version_changed, 'value')
-        self.info = ipw.HTML('')
+    def __init__(self, *args, **kwargs):
         self._clear_timer = 0
-        super().__init__([self.selected, self.info])
+        super().__init__(*args, **kwargs)
 
-    def _clear_info_after_delay(self, delay=3):
+    def _clear_value_after_delay(self, delay):
         self._clear_timer = time() + delay  # reset timer
         sleep(delay)
         if time() > self._clear_timer:
-            self.info.value = ''
+            self.value = ''
 
-    def version_changed(self, change):
-        old, new = change['old'], change['new']
-        self.info.value = f"Switched version from {old} to {new}."
-        Thread(target=self._clear_info_after_delay).start()
+    def show_temporary_message(self, value, clear_after=3):
+        self.value = value
+        if clear_after > 0:
+            Thread(target=self._clear_value_after_delay, args=(clear_after,)).start()

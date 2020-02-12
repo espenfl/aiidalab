@@ -17,7 +17,7 @@ from dulwich.porcelain import status as git_status
 from dulwich.errors import NotGitRepository
 from cachetools.func import ttl_cache
 
-from .widgets import VersionSelectorWidget
+from .widgets import StatusLabel
 from .utils import get_remotes
 
 
@@ -78,7 +78,7 @@ class GitManagedAiidaLabApp(traitlets.HasTraits):
         assert app_data is not None
         self._app_data = app_data
 
-        self.install_info = ipw.HTML()
+        self.status_message = ipw.HTML()
 
     def is_installed(self):
         return self.path.is_dir()
@@ -348,13 +348,13 @@ class GitManagedAiidaLabAppWidget(ipw.VBox):
     def __init__(self, app):
         self.app = app
 
-        self.install_info = ipw.HTML()
+        self.status_message = StatusLabel()
 
-        self.install_button = ipw.Button(description="install")
+        self.install_button = ipw.Button(description="Install", icon='check')
         self.install_button.on_click(self.app._install_app)
         self.install_button.disabled = self.app.installed
 
-        self.uninstall_button = ipw.Button(description="uninstall")
+        self.uninstall_button = ipw.Button(description="Uninstall", icon='close')
 
         def _on_uninstall_button_clicked(_):
             self.app.version = None
@@ -364,15 +364,22 @@ class GitManagedAiidaLabAppWidget(ipw.VBox):
 
         self.app.observe(self._on_change_app_installed, 'installed')
 
-        self.buttons = ipw.HBox([self.uninstall_button, self.install_button])
+        self.buttons = ipw.HBox([self.install_button, self.uninstall_button])
 
-        self.version_selector = VersionSelectorWidget(
-            options=self.app.available_versions, value=self.app.version)
+        self.version_selector = ipw.Select(
+            options=self.app.available_versions,
+            value=self.app.version,
+            description='Select version',
+            disabled=not self.app.installed,
+            style={'description_width': 'initial'},
+            )
 
         self.logo = ipw.HTML()
-        self.logo.layout.width = '100px'
-        self.logo.layout.height = '100px'
-        self.logo.layout.margin = "100px 0px 0px 0px"
+        self.logo.layout = {'width': '100px', 'height': '100px'}
+        self.logo.layout.margin = "10px 10px 10px 10px"
+
+        self.title = ipw.HTML(f"""<b> <div style="font-size: 30px; text-align:center;">{self.app.title}</div></b>""")
+        self.title.layout = dict(height='50px')
 
         self.description = ipw.HTML()
         self.description.layout = {'width': '800px'}
@@ -381,24 +388,30 @@ class GitManagedAiidaLabAppWidget(ipw.VBox):
         self.banner = ipw.HBox([self.logo, self.description])
 
         self.app.observe(self._update_logo_and_description, 'version')
+        self.app.observe(self._show_version_switched_message, 'version')
 
-        traitlets.dlink((self.app, 'available_versions'), (self.version_selector.selected, 'options'))
-        traitlets.link((self.app, 'version'), (self.version_selector.selected, 'value'))
+        traitlets.dlink((self.app, 'available_versions'), (self.version_selector, 'options'))
+        traitlets.link((self.app, 'version'), (self.version_selector, 'value'))
 
-        super().__init__(children=[self.banner, self.buttons, self.install_info, self.version_selector])
+        super().__init__(children=[
+            self.title, self.banner, self.buttons,
+            self.version_selector, self.status_message])
 
     def _on_change_app_installed(self, change):
         installed = change['new']
         self.install_button.disabled = installed
         self.uninstall_button.disabled = not installed
+        self.version_selector.disabled = not installed
 
     def _update_logo_and_description(self, _=None):
         self.description.value = F"""
-        <b> <div style="font-size: 30px; text-align:center;">{self.app.title}</div></b>
-        <br>
         <b>Authors:</b> {self.app.authors}
         <br>
         <b>Description:</b> {self.app.description}
         <br>
         <b>Git URL:</b> {self.app.git_url}"""
         self.logo.value = f'<img src="{self.app.logo_path()}">'
+
+    def _show_version_switched_message(self, change):
+        self.status_message.show_temporary_message(
+            f"Switched version from {change['old']} to {change['new']}.")
