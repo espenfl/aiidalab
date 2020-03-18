@@ -94,6 +94,6 @@ def load_start_md(name):
 
 def get_remotes(repo):
     for ref in [ref.decode() for ref in repo.get_refs()]:
-        match = re.match(r'refs\/remotes\/(?P<remote>.+)\/.*', ref)
+        match = re.match(r'refs\/remotes\/(?P<remote>.+?)\/.*', ref)
         if match:
             yield match.groupdict()['remote']
