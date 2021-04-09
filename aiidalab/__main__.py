@@ -36,18 +36,25 @@ class AiidaLabApp:
             },
         )
 
-    def is_installed(self):
-        """The app is installed if the corresponding folder is present."""
-        return self.path.exists()
+    @classmethod
+    def from_name(cls, name, registry=None, apps_path=None):
+        if registry is None:
+            registry = load_app_registry()
+        if apps_path is None:
+            apps_path = AIIDALAB_APPS
+
+        return cls.from_registry(
+            path=Path(apps_path).joinpath(name), registry_entry=registry["apps"][name]
+        )
 
     @property
     def _repo(self):
         from .git_util import GitManagedAppRepo as Repo
 
-        if self.is_installed():
+        if self.path.exists():
             return Repo(str(self.path))
 
-    def _installed_version(self):
+    def installed_version(self):
         if self._repo and not self._repo.dirty():
             head_sha = self._repo.head().decode()
             versions_by_sha = {r["sha"]: k for k, r in self.releases.items()}
@@ -92,6 +99,25 @@ def cli():
 
 
 @cli.command()
+@click.option(
+    "-a",
+    "--all",
+    "all_",
+    is_flag=True,
+    help="List all available apps, even those not installed.",
+)
+def list(all_):
+    registry = load_app_registry()
+    for app_name in registry["apps"]:
+        app = AiidaLabApp.from_name(app_name)
+        app_version = app.installed_version()
+        if all_ or app_version is not None:
+            click.echo(
+                f"{app.name:<30} {'[not installed]' if app_version is None else app_version}"
+            )
+
+
+@cli.command()
 @click.argument("app-requirement")
 @click.option("-f", "--force", is_flag=True)
 def install(app_requirement, force):
@@ -121,12 +147,16 @@ def install(app_requirement, force):
     matching_releases.sort(key=parse, reverse=True)
 
     if matching_releases:
-        if not force and app.is_installed():
-            raise click.ClickException(
-                "App is already installed. Use -f/--force option to ignore."
+        version_to_install = matching_releases[0]
+
+        if force or version_to_install != app.installed_version():
+            app.install(version=version_to_install)
+            click.echo(f"Installed {app.name}=={matching_releases[0]} at {app.path} .")
+        elif version_to_install == app.installed_version():
+            click.echo(
+                f"App already installed in version '{version_to_install}' "
+                "Use the -f/--force option to ignore and re-install."
             )
-        app.install(version=matching_releases[0])
-        click.echo(f"Installed {app.name}=={matching_releases[0]} at {app.path} .")
     else:
         raise click.ClickException(
             f"No matching release for '{app_requirement.specifier}'. "
