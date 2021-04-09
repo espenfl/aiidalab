@@ -16,6 +16,18 @@ from .config import AIIDALAB_APPS
 from .utils import load_app_registry
 
 
+def _git_clone(url, branch, path):
+    try:
+        run(
+            ["git", "clone", "--depth=1", f"--branch={branch}", str(url), str(path)],
+            capture_output=True,
+            encoding="utf-8",
+            check=True,
+        )
+    except CalledProcessError as error:
+        raise RuntimeError(error.stderr)
+
+
 @dataclass
 class AiidaLabApp:
 
@@ -70,6 +82,14 @@ class AiidaLabApp:
         if self.path.exists():
             shutil.rmtree(self.path)
 
+    def find_matching_release(self, specifier):
+        matching_releases = [
+            version for version in self.releases if parse(version) in specifier
+        ]
+        # Sort by intrinsic order (e.g. 1.1.0 -> 1.0.1 -> 1.0.0 and so on)
+        matching_releases.sort(key=parse, reverse=True)
+        return matching_releases
+
     def install(self, version=None):
         if version is None:
             try:
@@ -78,24 +98,12 @@ class AiidaLabApp:
                 raise ValueError("No versions available for '{self}'.")
 
         self.uninstall()
-
         try:
-            run(
-                [
-                    "git",
-                    "clone",
-                    "--depth=1",
-                    "--branch",
-                    str(version),
-                    f"{urldefrag(self.git_url).url}",
-                    str(self.path),
-                ],
-                capture_output=True,
-                check=True,
-            )
-        except CalledProcessError as error:
+            _git_clone(urldefrag(self.git_url).url, version, self.path)
+        except RuntimeError as error:
             raise RuntimeError(
-                f"Failed to install '{self.name}' at '{self.path}': {error.stderr}"
+                f"Failed to install '{self.name}' (version={version}) at '{self.path}'"
+                f", due to error: {error}"
             )
 
 
@@ -113,12 +121,19 @@ def cli():
     help="List all available apps, even those not installed.",
 )
 def list(all_):
-    registry = load_app_registry()
-    for app_name in registry["apps"]:
-        app = AiidaLabApp.from_name(app_name)
-        app_version = app.installed_version()
-        if all_ or app_version is not AppVersion.NOT_INSTALLED:
-            click.echo(f"{app.name:<29} {app_version}{'*' if app.dirty() else ''}")
+    all_apps = [
+        str(app_path.relative_to(AIIDALAB_APPS))
+        for app_path in Path(AIIDALAB_APPS).iterdir()
+    ]
+    for app_name in sorted(all_apps):
+        try:
+            app = AiidaLabApp.from_name(app_name)
+        except KeyError:
+            click.echo(f"{app_name:<29} [detached]")
+        else:
+            app_version = app.installed_version()
+            if all_ or app_version is not AppVersion.NOT_INSTALLED:
+                click.echo(f"{app.name:<29} {app_version}{'*' if app.dirty() else ''}")
 
 
 @cli.command()
@@ -128,28 +143,14 @@ def install(app_requirement, force):
     """Show basic information about the app and the installation status."""
     from packaging.requirements import Requirement
 
-    registry = load_app_registry()
-
     app_requirement = Requirement(app_requirement)
     try:
-        app = AiidaLabApp.from_registry(
-            path=Path(AIIDALAB_APPS).joinpath(app_requirement.name),
-            registry_entry=registry["apps"][app_requirement.name],
-        )
+        app = AiidaLabApp.from_name(app_requirement.name)
     except KeyError:
         raise click.ClickException(
             f"Did not find entry for app with name '{app_requirement.name}'."
         )
-
-    matching_releases = [
-        version
-        for version in app.releases
-        if parse(version) in app_requirement.specifier
-    ]
-
-    # Sort by intrinsic order (e.g. 1.1.0 -> 1.0.1 -> 1.0.0 and so on)
-    matching_releases.sort(key=parse, reverse=True)
-
+    matching_releases = app.find_matching_release(app_requirement.specifier)
     if matching_releases:
         version_to_install = matching_releases[0]
 
@@ -172,7 +173,21 @@ def install(app_requirement, force):
 @click.argument("app-name")
 @click.option("-f", "--force", is_flag=True)
 def uninstall(app_name, force):
-    app = AiidaLabApp.from_name(app_name)
+    try:
+        app = AiidaLabApp.from_name(app_name)
+    except KeyError:
+        app_path = Path(AIIDALAB_APPS).joinpath(app_name)
+        if app_path.exists():
+            raise click.ClickException(
+                f"Did not find entry for app with name '{app_name}'. "
+                f"However the directory '{app_path}' exists. "
+                "Try removing the directory manually."
+            )
+        else:
+            raise click.ClickException(
+                f"Did not find entry for app with name '{app_name}'."
+            )
+
     if app.path.exists():
         detached = app.dirty() or app.installed_version() is AppVersion.UNKNOWN
         if force or not detached:
